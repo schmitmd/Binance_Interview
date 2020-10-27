@@ -48,24 +48,50 @@ def get_response_as_json(request_obj):
         sys.exit(err)
 
 
-def sort_json_obj(json_obj, parent_array, sort_by):
+def get_kline(api_url, symbol, interval):
     """ Return JSON values sorted """
-    data_dump = json_normalize(json_obj[parent_array])
+    kline = make_request(api_url + "klines" + "?symbol=" + symbol +
+                         "&interval=" + interval)
+    return kline
 
-    return data_dump.sort_values([sort_by])
+
+def sort_klines_by_volume(kline_list_obj):
+    """ Sort kline list by Volume """
+    # TODO: Make a struct or something to sort by an arbitrary value in klines List instead of hard-coding here
+    return sorted(kline_list_obj, key=lambda x: x[5], reverse=True)
 
 
 def main():
     """ Main Function """
+
+    # Set base API URL
     api_url = "https://api.binance.com/api/v3/"
 
     # Basic connectivity check
     make_request(api_url + "ping")
 
-    response = sort_json_obj(
-        get_response_as_json(make_request(api_url + "exchangeInfo")),
-        "symbols", "quoteAsset")
-    print(response)
+    # Initialize an empty List of symbols to get klines for
+    symbols_to_check = []
+
+    # Get exchangeInfo, loop through symbols searching for quoteAssets that are "BTC", add them to the symbols_to_check List
+    exchange = get_response_as_json(make_request(api_url + "exchangeInfo"))
+    for item in exchange.get("symbols"):
+        if "BTC" in item.get("quoteAsset"):
+            symbols_to_check += [item.get("symbol")]
+
+    # This will be a List of Lists per Binance API spec https://github.com/binance-exchange/binance-official-api-docs/blob/master/rest-api.md#klinecandlestick-data
+    kline_results = []
+
+    # Get the klines for the last 24h for each symbol
+    for symbol in symbols_to_check:
+        kline_results.append(get_kline(api_url, symbol, "1d").text)
+
+    # FIXME: Use JSON key-values instead of a List of a bunch of sub-Lists
+
+    #print(kline_results[1])
+
+    # Now we need to check values of the sub-lists in kline_results List
+    #print(sort_klines_by_volume(kline_results))
 
 
 # Execute main function
