@@ -4,23 +4,30 @@
 
 import sys
 
-#import argparse
+import argparse
 import requests
 import simplejson
-from pandas import json_normalize
 
 # Parse Arguments
-#parser = argparse.ArgumentParser(description="Token Argument.")
-#parser.add_argument(
-#    "-t",
-#    "--token",
-#    type=str,
-#    help=
-#    "A valid token for querying the API",
-#    required=False,
-#)
-
-#args = parser.parse_args()
+parser = argparse.ArgumentParser(
+    description=
+    "Print the top 5 symbols with quote asset BTC and the highest volume over the last 24 hours in descending order."
+)
+parser.add_argument(
+    "-k",
+    "--apikey",
+    type=str,
+    help="A valid API token for querying the Binance SPOT API",
+    required=False,
+)
+parser.add_argument(
+    "-s",
+    "--secret",
+    type=str,
+    help="A valid API secret token for querying the Binance SPOT API",
+    required=False,
+)
+args = parser.parse_args()
 
 
 def make_request(url):
