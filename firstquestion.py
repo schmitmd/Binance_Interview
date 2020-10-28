@@ -7,6 +7,8 @@ import sys
 import argparse
 import requests
 import simplejson
+# TODO: Use the community binance python lib
+# from binance.client import Client
 
 # Parse Arguments
 parser = argparse.ArgumentParser(
@@ -63,8 +65,8 @@ def get_kline(api_url, symbol, interval):
 
 
 def sort_klines_by_volume(kline_list_obj):
-    """ Sort kline list by Volume """
-    # TODO: Make a struct or something to sort by an arbitrary value in klines List instead of hard-coding here
+    """ Sort kline List of Lists object by Volume in sub-Lists """
+    # TODO: Make a struct or something to sort by an arbitrary value in klines List instead of hard-coding the 6th element here
     return sorted(kline_list_obj, key=lambda x: x[5], reverse=True)
 
 
@@ -91,9 +93,8 @@ def main():
 
     # Get the klines for the last 24h for each symbol
     for symbol in symbols_to_check:
+        # FIXME: Use JSON instead of a List of a bunch of sub-Lists
         kline_results.append(get_kline(api_url, symbol, "1d").text)
-
-    # FIXME: Use JSON key-values instead of a List of a bunch of sub-Lists
 
     #print(kline_results[1])
 
