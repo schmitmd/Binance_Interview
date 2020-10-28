@@ -29,6 +29,13 @@ parser.add_argument(
     help="A valid API secret token for querying the Binance SPOT API",
     required=False,
 )
+parser.add_argument(
+    "-q",
+    "--quoteAsset",
+    type=str,
+    help="A quote asset type to search symbols by in the Binance SPOT API",
+    required=False,
+)
 args = parser.parse_args()
 
 
@@ -70,6 +77,16 @@ def sort_klines_by_volume(kline_list_obj):
     return sorted(kline_list_obj, key=lambda x: x[5], reverse=True)
 
 
+def find_symbols_by_quote_asset(exchange_json_obj, quote_asset_type):
+    """ Filter symbols by quoteAsset """
+    # FIXME: Don't hard-code this symbols part
+    symbol_list = []
+    for item in exchange_json_obj.get("symbols"):
+        if quote_asset_type in item.get("quoteAsset"):
+            symbol_list += [item.get("symbol")]
+    return symbol_list
+
+
 def main():
     """ Main Function """
 
@@ -79,27 +96,11 @@ def main():
     # Basic connectivity check
     make_request(api_url + "ping")
 
-    # Initialize an empty List of symbols to get klines for
-    symbols_to_check = []
-
     # Get exchangeInfo, loop through symbols searching for quoteAssets that are "BTC", add them to the symbols_to_check List
     exchange = get_response_as_json(make_request(api_url + "exchangeInfo"))
-    for item in exchange.get("symbols"):
-        if "BTC" in item.get("quoteAsset"):
-            symbols_to_check += [item.get("symbol")]
+    symbol_list = find_symbols_by_quote_asset(exchange, args.quoteAsset)
 
-    # This will be a List of Lists per Binance API spec https://github.com/binance-exchange/binance-official-api-docs/blob/master/rest-api.md#klinecandlestick-data
-    kline_results = []
-
-    # Get the klines for the last 24h for each symbol
-    for symbol in symbols_to_check:
-        # FIXME: Use JSON instead of a List of a bunch of sub-Lists
-        kline_results.append(get_kline(api_url, symbol, "1d").text)
-
-    #print(kline_results[1])
-
-    # Now we need to check values of the sub-lists in kline_results List
-    #print(sort_klines_by_volume(kline_results))
+    print(symbol_list)
 
 
 # Execute main function
