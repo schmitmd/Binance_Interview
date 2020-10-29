@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-""" Print the top 5 symbols with quote asset BTC and the highest volume over the last 24 hours in descending order."""
+""" Print the top 5 symbols with quote asset BTC or USDT and the highest volume over the last 24 hours in descending order."""
 
+import concurrent.futures
 import sys
-
 import argparse
-#from pprint import pprint
 import requests
 import simplejson
 # TODO: Use the community binance python lib
@@ -94,6 +93,7 @@ def find_symbols_by_quote_asset(exchange_json_obj, quote_asset_type):
 
 def main():
     """ Main Function """
+
     #example_symbols = [
     #    "ETHBTC", "LTCBTC", "BNBBTC", "NEOBTC", "BCCBTC", "GASBTC", "HSRBTC",
     #    "MCOBTC", "WTCBTC"
@@ -122,6 +122,7 @@ def main():
 
     # Populate symbols list by searching through exchangeInfo for quoteAssets of type args.quoteAsset
     symbol_list = find_symbols_by_quote_asset(exchange, args.quoteAsset)
+    #symbol_list = example_symbols
 
     # Make a dictionary with the keys being symbols and values being empty
     # Lists (which will be populated below as Lists of Lists by getting the
@@ -130,19 +131,19 @@ def main():
     for item in symbol_list:
         symbol_dict.__setitem__(item, [])
 
-    # This will be a List of Lists per Binance API spec https://github.com/binance-exchange/binance-official-api-docs/blob/master/rest-api.md#klinecandlestick-data
-    #kline_results = []
-    # Get the klines for the last 24h for each symbol
-    #for symbol in example_symbols:
-    # TODO: Use JSON instead of a List of a bunch of sub-Lists?
-    #    kline_results.append(get_kline(api_url, symbol, "1d"))
-
-    # Populate the dictionary of symbols (keys) with the top value returned for the klines over the last 24h for that symbol
-    # FIXME: ThreadPool this.  Takes forever!!!!
-    for key in symbol_dict:
-        print("Parsing klines for " + key)
-        symbol_dict[key] = sort_klines_by_volume(get_kline(api_url, key,
-                                                           "1d"))[0]
+    # ThreadPool the API calls for getting klines.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        futures = []
+        for key in symbol_dict:
+            futures.append(
+                executor.submit(get_kline,
+                                api_url=api_url,
+                                symbol=key,
+                                interval="1d"))
+        for future in concurrent.futures.as_completed(futures):
+            # Populate the dictionary of symbols (keys) with the top value returned for the klines over the last 24h for that symbol
+            for key in symbol_dict:
+                symbol_dict[key] = sort_klines_by_volume(future.result())[0]
 
     # Set test value with super high Volume value to validate sort
     #symbol_dict.__setitem__("LTCBTC", [
