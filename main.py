@@ -53,6 +53,14 @@ parser.add_argument(
     help="Number of top bids and asks to get notional values for by symbol",
     required=False,
 )
+parser.add_argument(
+    "-t",
+    "--top",
+    type=int,
+    default=5,
+    help="Number of top symbols to show",
+    required=False,
+)
 args = parser.parse_args()
 
 
@@ -235,20 +243,19 @@ def main():
                 # Sort the List of Lists by Volume element in sub-lists, save.
                 symbol_dict[key] = future.result()
 
-    sorted_symbols = []
     if args.sort == 'volume':
         for i in symbol_dict:
             symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
         sorted_symbols = get_sorted_symbols_by_volume(symbol_dict)
-        print("Top 5 symbols by Volume over the last 24h")
+        print("Top ", args.top, "symbols by Volume over the last 24h")
     elif args.sort == 'trades':
         for i in symbol_dict:
             symbol_dict[i] = sort_klines_by_trades(symbol_dict[i])
         sorted_symbols = get_sorted_symbols_by_trades(symbol_dict)
-        print("Top 5 symbols by Number of Trades over the last 24h")
+        print("Top", args.top, "symbols by Number of Trades over the last 24h")
 
     # Print the results
-    for item in sorted_symbols[0:5]:
+    for item in sorted_symbols[0:args.top]:
         print(item[0])
 
     # Go do the notional value stuff if requested, otherwise we're done.
@@ -257,9 +264,9 @@ def main():
     else:
         limit = get_order_book_request_limit(args.notional)
 
-    bids_dict, asks_dict = {}, {}
-    # Print the results
-    for item in sorted_symbols[0:5]:
+    bids_dict, asks_dict = {}, {}  # Create empty Dicts
+
+    for item in sorted_symbols[0:args.top]:
         bids_dict[item[0]] = None
         asks_dict[item[0]] = None
     bids_dict = notional_get(bids_dict, api_url, "bids", limit)
