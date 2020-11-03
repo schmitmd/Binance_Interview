@@ -5,8 +5,10 @@
 import concurrent.futures
 import sys
 import argparse
+import datetime
 import requests
 import simplejson
+
 # TODO: Use the community binance python lib
 # from binance.client import Client
 #parser.add_argument(
@@ -34,6 +36,14 @@ parser.add_argument(
     type=str,
     help=
     "A quote asset type to filter symbols by in the Binance SPOT API (BTC,USDT,etc)",
+    required=False,
+)
+parser.add_argument(
+    "-s",
+    "--sort",
+    type=str,
+    help="Sort top values by",
+    choices=['volume', 'trades'],
     required=False,
 )
 parser.add_argument(
@@ -73,10 +83,16 @@ def get_response_as_json(request_obj):
         sys.exit(err)
 
 
-def get_kline(api_url, symbol, interval="1d"):
-    """ Return List of klines for a passed symbol and interval (default to 24h) """
-    kline = make_request(api_url + "klines" + "?symbol=" + symbol +
-                         "&interval=" + interval)
+def get_kline(api_url, symbol, endtime_ms, starttime_ms, interval="1m"):
+    """ Return List of klines for a passed symbol and interval (default to 1min
+        interval) between a startTime and an endTime in milliseconds
+    """
+    kline = make_request(
+        str(api_url) + "klines" + "?symbol=" + str(symbol) + "&interval=" +
+        str(interval) + "&endTime=" + str(endtime_ms) + "&startTime=" +
+        str(starttime_ms))
+
+    # FIXME: should use get_response_as_json func?
     return list(kline.json())
 
 
@@ -90,10 +106,34 @@ def get_order_book_request_limit(limit):
              str(valid_limits[-1]))
 
 
+def get_offset_time_in_milliseconds():
+    """ Return current time in milliseconds """
+    # FIXME: Allow specifying timezone like "America/Denver", don't force UTC timezone
+    # Get epoch (assume UTC by default)
+    epoch = datetime.datetime.utcfromtimestamp(0).replace(
+        tzinfo=datetime.timezone.utc)
+
+    # Get current time (assume UTC by default)
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Get time from 24h ago epoch (assume UTC by default)
+    day_ago = (now - datetime.timedelta(hours=24))
+
+    # Return the difference in milliseconds
+    return (int((now - epoch).total_seconds() * 1000.0),
+            int((day_ago - epoch).total_seconds() * 1000.0))
+
+
 def sort_klines_by_volume(kline_list_obj):
     """ Sort kline List of Lists object by Volume in sub-Lists """
     # TODO: Make a struct or something to sort by an arbitrary value in klines List instead of hard-coding the 7th element here
-    return sorted(kline_list_obj, key=lambda x: x[6])
+    return sorted(kline_list_obj, key=lambda x: x[6], reverse=True)
+
+
+def sort_klines_by_trades(kline_list_obj):
+    """ Sort kline List of Lists object by Number of Trades in sub-Lists """
+    # TODO: Make a struct or something to sort by an arbitrary value in klines List instead of hard-coding the 9th element here
+    return sorted(kline_list_obj, key=lambda x: x[8], reverse=True)
 
 
 def find_symbols_by_quote_asset(exchange_json_obj, quote_asset_type=None):
@@ -115,6 +155,50 @@ def get_order_book(api_url, symbol, limit):
     return request.json()
 
 
+def get_sorted_symbols_by_trades(symbol_dict):
+    """ Return a List of passed Dict keys sorted by 9th element (Number of Trades) in sorted List of Sub-Lists """
+    for i in symbol_dict:
+        symbol_dict[i] = sort_klines_by_trades(symbol_dict[i])
+    # Get a List of the Dict keys sorted by 9th element (Number of Trades) in each
+    # sub-List of the first List item by symbol (already know first List item is
+    # highest volume per symbol thanks to above sort_klines_by_trades() call
+    # {"ETHBTC": [(_1_)[(_0_)0,1,2,3,4,5,6,7,8(_8_),9,10],[0,1,2,3,4,5,6,7,8(_8_),9,10]]}
+    sorted_symbols = sorted(symbol_dict.items(),
+                            key=lambda x: x[1][0][8],
+                            reverse=True)
+    return sorted_symbols
+
+
+def get_sorted_symbols_by_volume(symbol_dict):
+    """ Return a List of passed Dict keys sorted by 7th element (Volume) in first entry of List of Sub-Lists """
+    for i in symbol_dict:
+        symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
+    # Get a List of the Dict keys sorted by 7th element (Volume) in each
+    # sub-List of the first List item by symbol (already know first List item is
+    # highest volume per symbol thanks to above sort_klines_by_volume() call
+    # {"ETHBTC": [(_1_)[(_0_)0,1,2,3,4,5,6(_6_),7,8,9,10],[0,1,2,3,4,5,6,7,8,9,10]]}
+    sorted_symbols = sorted(symbol_dict.items(),
+                            key=lambda x: x[1][0][6],
+                            reverse=True)
+    return sorted_symbols
+
+
+def notional_get(symbol_dict, api_url, get_type, limit):
+    """ Get Order Book for a symbol, filtering by type (bids/asks) as passed """
+    # ThreadPool the API calls for getting order books (see ThreadPool todo above).
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(symbol_dict)) as executor:
+        futures = (executor.submit(get_order_book,
+                                   api_url=api_url,
+                                   symbol=key,
+                                   limit=limit) for key in symbol_dict)
+        for future in concurrent.futures.as_completed(futures):
+            # Populate the dictionary of symbols (keys) with the Order Book value returned
+            for key in symbol_dict:
+                symbol_dict[key] = future.result().get(str(get_type))
+    return symbol_dict
+
+
 def main():
     """ Main Function """
 
@@ -124,38 +208,46 @@ def main():
     # Basic connectivity check
     make_request(api_url + "ping")
 
+    # Get 24h time offset for kline API data calls
+    now_ms, day_ago_ms = get_offset_time_in_milliseconds()
+
     # Get exchangeInfo as JSON
     exchange = get_response_as_json(make_request(api_url + "exchangeInfo"))
 
     # Populate symbols list by searching through exchangeInfo for quoteAssets of type args.quoteAsset
     symbol_list = find_symbols_by_quote_asset(exchange, args.quoteAsset)
 
-    # Make a dictionary with the keys being symbols and values being empty
+    # Make a dictionary with the keys being symbols from the symbol_list above
     # Lists (which will be populated below as Lists of Lists by getting the
     # klines for each symbol)
-    symbol_dict = {}
-    for item in symbol_list:
-        symbol_dict[item] = ""
+    symbol_dict = dict.fromkeys(symbol_list, None)
 
     # ThreadPool the API calls for getting klines.
     # TODO: Make this ThreadPooling a function, maybe don't hard-code workers number?
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-        futures = []  # Empty List to track Future objects
-        for key in symbol_dict:
-            futures.append(
-                executor.submit(get_kline, api_url=api_url, symbol=key))
+        futures = (executor.submit(get_kline,
+                                   api_url=api_url,
+                                   symbol=key,
+                                   starttime_ms=day_ago_ms,
+                                   endtime_ms=now_ms) for key in symbol_dict)
         for future in concurrent.futures.as_completed(futures):
-            # Populate the dictionary of symbols (keys) with the top value returned for the klines over the last 24h for that symbol
             for key in symbol_dict:
-                symbol_dict[key] = sort_klines_by_volume(future.result())[0]
+                # Sort the List of Lists by Volume element in sub-lists, save.
+                symbol_dict[key] = future.result()
 
-    # Sort the Dict by 7th element in List item (Volume), return sorted List
-    sorted_symbols = sorted(symbol_dict.items(),
-                            key=lambda x: x[1][6],
-                            reverse=True)
+    sorted_symbols = []
+    if args.sort == 'volume':
+        for i in symbol_dict:
+            symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
+        sorted_symbols = get_sorted_symbols_by_volume(symbol_dict)
+        print("Top 5 symbols by Volume over the last 24h")
+    elif args.sort == 'trades':
+        for i in symbol_dict:
+            symbol_dict[i] = sort_klines_by_trades(symbol_dict[i])
+        sorted_symbols = get_sorted_symbols_by_trades(symbol_dict)
+        print("Top 5 symbols by Number of Trades over the last 24h")
 
-    # Print the first 5 items in the sorted List
-    print("Top 5 symbols by Volume over the last 24h")
+    # Print the results
     for item in sorted_symbols[0:5]:
         print(item[0])
 
@@ -165,39 +257,22 @@ def main():
     else:
         limit = get_order_book_request_limit(args.notional)
 
-        # Define Dicts
-        notional_dict = {}
-        bids_dict = {}
-        asks_dict = {}
+    bids_dict, asks_dict = {}, {}
+    # Print the results
+    for item in sorted_symbols[0:5]:
+        bids_dict[item[0]] = None
+        asks_dict[item[0]] = None
+    bids_dict = notional_get(bids_dict, api_url, "bids", limit)
+    asks_dict = notional_get(asks_dict, api_url, "asks", limit)
 
-        for item in sorted_symbols[0:5]:
-            # Add those symbols to a new Dict to get the Order Book JSON for each.
-            # FIXME: This one is a wasted Dict, should use a List
-            notional_dict[item[0]] = ""
-            bids_dict[item[0]] = ""
-            asks_dict[item[0]] = ""
+    # Trim to requested amount
+    for key in bids_dict:
+        del bids_dict[key][args.notional:]
+    for key in asks_dict:
+        del asks_dict[key][args.notional:]
 
-    # ThreadPool the API calls for getting order books (see ThreadPool todo above).
-    with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(notional_dict)) as executor:
-        futures = []
-        for key in notional_dict:
-            futures.append(
-                executor.submit(get_order_book,
-                                api_url=api_url,
-                                symbol=key,
-                                limit=limit))
-        for future in concurrent.futures.as_completed(futures):
-            # Populate the dictionary of symbols (keys) with the Order Book value returned
-            for key in notional_dict:
-                bids_dict[key] = future.result().get("bids")
-                asks_dict[key] = future.result().get("asks")
-            # Trim to requested amount
-            del bids_dict[key][args.notional:]
-            del asks_dict[key][args.notional:]
-
-    # Loop through the notional Dict's keys
-    for item in notional_dict:
+    # Loop through the Dict's keys FIXME: This is wrong
+    for item in bids_dict:
         bids_total = float(0)
         asks_total = float(0)
 
