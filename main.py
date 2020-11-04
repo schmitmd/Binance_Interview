@@ -44,6 +44,7 @@ parser.add_argument(
     type=str,
     help="Sort top values by",
     choices=['volume', 'trades'],
+    default='volume',
     required=False,
 )
 parser.add_argument(
@@ -104,7 +105,7 @@ def get_kline(api_url, symbol, endtime_ms, starttime_ms, interval="1m"):
     return list(kline.json())
 
 
-def get_order_book_request_limit(limit):
+def get_order_book_request_limit(limit=100):
     """ Return a valid request limit parameter (int) for the order book API endpoint """
     valid_limits = [5, 10, 20, 50, 100, 500, 1000, 5000]
     for value in valid_limits:
@@ -156,7 +157,7 @@ def find_symbols_by_quote_asset(exchange_json_obj, quote_asset_type=None):
 
 
 # TODO: set allowed numbers for limit option
-def get_order_book(api_url, symbol, limit):
+def get_order_book(api_url, symbol, limit=100):
     """ Get Order Book for a symbol """
     request = make_request(api_url + "depth" + "?symbol=" + symbol +
                            "&limit=" + str(limit))
@@ -191,6 +192,12 @@ def get_sorted_symbols_by_volume(symbol_dict):
     return sorted_symbols
 
 
+def sort_by_price(list_obj):
+    """ Return a List of Lists object in descending order sorted by 1st element (price) in Sub-Lists """
+    # TODO: Make a struct or something to sort by price or quantity
+    return sorted(list_obj, key=lambda x: x[0], reverse=True)
+
+
 def notional_get(symbol_dict, api_url, get_type, limit):
     """ Get Order Book for a symbol, filtering by type (bids/asks) as passed """
     # ThreadPool the API calls for getting order books (see ThreadPool todo above).
@@ -205,6 +212,15 @@ def notional_get(symbol_dict, api_url, get_type, limit):
             for key in symbol_dict:
                 symbol_dict[key] = future.result().get(str(get_type))
     return symbol_dict
+
+
+def get_total_notional_value(list_obj):
+    """ Return float value sum of price*quantity of List of Sub-Lists by Dictionary object key (symbol) """
+    running_total = float(0)
+    # Loop through List of Lists, summing up price*quantity (=notional value)
+    for i in list_obj:
+        running_total += (float(i[0]) * float(i[1]))
+    return running_total
 
 
 def main():
@@ -243,6 +259,7 @@ def main():
                 # Sort the List of Lists by Volume element in sub-lists, save.
                 symbol_dict[key] = future.result()
 
+    # Aggregate volume or number of trades based on command arguments
     if args.sort == 'volume':
         for i in symbol_dict:
             symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
@@ -264,38 +281,36 @@ def main():
     else:
         limit = get_order_book_request_limit(args.notional)
 
-    bids_dict, asks_dict = {}, {}  # Create empty Dicts
+    # FIXME: These shouldn't be separate Dicts, this makes two separate
+    # calls to notional_get(), one for bids and one for asks.
+    # Seed new Dicts with the top symbols returned above
+    bids_dict = dict.fromkeys(symbol_list[0:args.top], None)
+    asks_dict = dict.fromkeys(symbol_list[0:args.top], None)
 
-    for item in sorted_symbols[0:args.top]:
-        bids_dict[item[0]] = None
-        asks_dict[item[0]] = None
+    # Populate Dicts with bids/asks
     bids_dict = notional_get(bids_dict, api_url, "bids", limit)
     asks_dict = notional_get(asks_dict, api_url, "asks", limit)
 
-    # Trim to requested amount
-    for key in bids_dict:
-        del bids_dict[key][args.notional:]
-    for key in asks_dict:
-        del asks_dict[key][args.notional:]
+    if args.notional is not None:
+        # Trim to requested amount
+        for key in bids_dict:
+            del bids_dict[key][args.notional:]
+        for key in asks_dict:
+            del asks_dict[key][args.notional:]
 
-    # Loop through the Dict's keys FIXME: This is wrong
+    # Loop through the Dict, printing the total notional value per symbol
     for item in bids_dict:
-        bids_total = float(0)
-        asks_total = float(0)
+        bids_total = get_total_notional_value(bids_dict[item])
+        print("Total notional value for top", len(bids_dict[item]),
+              "bids for symbol", item, ":", bids_total)
 
-        # Loop through the bids_dict's List of Lists, summing up price*quantity (notional value)
-        for i in bids_dict[item]:
-            bids_total += (float(i[0]) * float(i[1]))
-        print(item, "total notional value of top", len(bids_dict[item]),
-              "bids:", bids_total)
+    for item in asks_dict:
+        asks_total = get_total_notional_value(asks_dict[item])
+        print("Total notional value for top", len(asks_dict[item]),
+              "asks for symbol", item, ":", asks_total)
 
-        # Loop through the asks_dict's List of Lists, summing up price*quantity (notional value)
-        for i in asks_dict[item]:
-            asks_total += (float(i[0]) * float(i[1]))
-        print(item, "total notional value of top", len(asks_dict[item]),
-              "asks:", asks_total)
-        # NOTE: Is this desired too?
-        #print(item, "total notional value of both:", (bids_total + asks_total))
+    # NOTE: Is this desired too?
+    #print(item, "total notional value of both:", (bids_total + asks_total))
 
 
 # Execute main function
