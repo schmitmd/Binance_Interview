@@ -55,6 +55,12 @@ parser.add_argument(
     required=False,
 )
 parser.add_argument(
+    "--spread",
+    type=bool,
+    help="Show price spread of symbols",
+    required=False,
+)
+parser.add_argument(
     "-t",
     "--top",
     type=int,
@@ -166,30 +172,21 @@ def get_order_book(api_url, symbol, limit=100):
 
 def get_sorted_symbols_by_trades(symbol_dict):
     """ Return a List of passed Dict keys sorted by 9th element (Number of Trades) in sorted List of Sub-Lists """
-    for i in symbol_dict:
-        symbol_dict[i] = sort_klines_by_trades(symbol_dict[i])
     # Get a List of the Dict keys sorted by 9th element (Number of Trades) in each
     # sub-List of the first List item by symbol (already know first List item is
     # highest volume per symbol thanks to above sort_klines_by_trades() call
     # {"ETHBTC": [(_1_)[(_0_)0,1,2,3,4,5,6,7,8(_8_),9,10],[0,1,2,3,4,5,6,7,8(_8_),9,10]]}
-    sorted_symbols = sorted(symbol_dict.items(),
-                            key=lambda x: x[1][0][8],
-                            reverse=True)
-    return sorted_symbols
+    return sorted(symbol_dict.items(), key=lambda x: x[1][0][8], reverse=True)
 
 
 def get_sorted_symbols_by_volume(symbol_dict):
     """ Return a List of passed Dict keys sorted by 7th element (Volume) in first entry of List of Sub-Lists """
-    for i in symbol_dict:
-        symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
     # Get a List of the Dict keys sorted by 7th element (Volume) in each
     # sub-List of the first List item by symbol (already know first List item is
     # highest volume per symbol thanks to above sort_klines_by_volume() call
     # {"ETHBTC": [(_1_)[(_0_)0,1,2,3,4,5,6(_6_),7,8,9,10],[0,1,2,3,4,5,6,7,8,9,10]]}
-    sorted_symbols = sorted(symbol_dict.items(),
-                            key=lambda x: x[1][0][6],
-                            reverse=True)
-    return sorted_symbols
+
+    return sorted(symbol_dict.items(), key=lambda x: x[1][0][6], reverse=True)
 
 
 def sort_by_price(list_obj):
@@ -200,17 +197,23 @@ def sort_by_price(list_obj):
 
 def notional_get(symbol_dict, api_url, get_type, limit):
     """ Get Order Book for a symbol, filtering by type (bids/asks) as passed """
-    # ThreadPool the API calls for getting order books (see ThreadPool todo above).
-    with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(symbol_dict)) as executor:
-        futures = (executor.submit(get_order_book,
-                                   api_url=api_url,
-                                   symbol=key,
-                                   limit=limit) for key in symbol_dict)
+    # ThreadPool the API calls for getting order books.
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = {
+            executor.submit(get_order_book,
+                            api_url=api_url,
+                            symbol=key,
+                            limit=limit): key
+            for key in symbol_dict
+        }
         for future in concurrent.futures.as_completed(futures):
             # Populate the dictionary of symbols (keys) with the Order Book value returned
-            for key in symbol_dict:
-                symbol_dict[key] = future.result().get(str(get_type))
+            # FIXME!!: This is a BUG! Order book should never return empty sets
+            if future.result() == []:
+                del symbol_dict[futures[future]]
+            else:
+                symbol_dict[futures[future]] = future.result().get(
+                    str(get_type))
     return symbol_dict
 
 
@@ -246,23 +249,28 @@ def main():
     # klines for each symbol)
     symbol_dict = dict.fromkeys(symbol_list, None)
 
-    # ThreadPool the API calls for getting klines.
-    # TODO: Make this ThreadPooling a function, maybe don't hard-code workers number?
-    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-        futures = (executor.submit(get_kline,
-                                   api_url=api_url,
-                                   symbol=key,
-                                   starttime_ms=day_ago_ms,
-                                   endtime_ms=now_ms) for key in symbol_dict)
+    # ThreadPool execute kline fetches for each symbol
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = {
+            executor.submit(get_kline,
+                            api_url=api_url,
+                            symbol=key,
+                            starttime_ms=day_ago_ms,
+                            endtime_ms=now_ms): key
+            for key in symbol_dict
+        }
+
         for future in concurrent.futures.as_completed(futures):
-            for key in symbol_dict:
-                # Sort the List of Lists by Volume element in sub-lists, save.
-                symbol_dict[key] = future.result()
+            # FIXME!!: This is a BUG! Klines should never return empty sets
+            if future.result() == []:
+                del symbol_dict[futures[future]]
+            else:
+                symbol_dict[futures[future]] = future.result()
 
     # Aggregate volume or number of trades based on command arguments
     if args.sort == 'volume':
         for i in symbol_dict:
-            symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
+            symbol_dict[i] = sort_klines_by_trades(symbol_dict[i])
         sorted_symbols = get_sorted_symbols_by_volume(symbol_dict)
         print("Top ", args.top, "symbols by Volume over the last 24h")
     elif args.sort == 'trades':
@@ -276,16 +284,23 @@ def main():
         print(item[0])
 
     # Go do the notional value stuff if requested, otherwise we're done.
-    if args.notional is None:
+    if args.notional is None and args.spread is None:
         sys.exit(0)
-    else:
+    elif args.notional is not None:
         limit = get_order_book_request_limit(args.notional)
+    else:
+        limit = get_order_book_request_limit()
 
     # FIXME: These shouldn't be separate Dicts, this makes two separate
     # calls to notional_get(), one for bids and one for asks.
     # Seed new Dicts with the top symbols returned above
-    bids_dict = dict.fromkeys(symbol_list[0:args.top], None)
-    asks_dict = dict.fromkeys(symbol_list[0:args.top], None)
+    #bids_dict = dict.fromkeys(symbol_list[0:args.top], None)
+    #asks_dict = dict.fromkeys(symbol_list[0:args.top], None)
+    bids_dict, asks_dict = {}, {}
+    for item in sorted_symbols[0:args.top]:
+        bids_dict[item[0]] = None
+        asks_dict[item[0]] = None
+        #print(item[0])
 
     # Populate Dicts with bids/asks
     bids_dict = notional_get(bids_dict, api_url, "bids", limit)
@@ -300,17 +315,30 @@ def main():
 
     # Loop through the Dict, printing the total notional value per symbol
     for item in bids_dict:
-        bids_total = get_total_notional_value(bids_dict[item])
         print("Total notional value for top", len(bids_dict[item]),
-              "bids for symbol", item, ":", bids_total)
+              "bids for symbol", item, ":",
+              get_total_notional_value(bids_dict[item]))
 
     for item in asks_dict:
-        asks_total = get_total_notional_value(asks_dict[item])
         print("Total notional value for top", len(asks_dict[item]),
-              "asks for symbol", item, ":", asks_total)
-
+              "asks for symbol", item, ":",
+              get_total_notional_value(asks_dict[item]))
     # NOTE: Is this desired too?
     #print(item, "total notional value of both:", (bids_total + asks_total))
+
+    if args.spread:
+        # Sort the bids Dict by price
+        for key in bids_dict:
+            bids_dict[key] = sort_by_price(bids_dict[key])
+
+        # Sort the asks Dict by price
+        for key in asks_dict:
+            asks_dict[key] = sort_by_price(asks_dict[key])
+
+        # Print the results (difference between highest bid price and lowest ask price)
+        for key in bids_dict:
+            print("Price spread for", key, ":",
+                  (float(bids_dict[key][0][0]) - float(asks_dict[key][-1][0])))
 
 
 # Execute main function
