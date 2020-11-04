@@ -55,6 +55,12 @@ parser.add_argument(
     required=False,
 )
 parser.add_argument(
+    "--spread",
+    type=bool,
+    help="Show price spread of symbols",
+    required=False,
+)
+parser.add_argument(
     "-t",
     "--top",
     type=int,
@@ -276,10 +282,12 @@ def main():
         print(item[0])
 
     # Go do the notional value stuff if requested, otherwise we're done.
-    if args.notional is None:
+    if args.notional is None and args.spread is None:
         sys.exit(0)
-    else:
+    elif args.notional is not None:
         limit = get_order_book_request_limit(args.notional)
+    else:
+        limit = get_order_book_request_limit()
 
     # FIXME: These shouldn't be separate Dicts, this makes two separate
     # calls to notional_get(), one for bids and one for asks.
