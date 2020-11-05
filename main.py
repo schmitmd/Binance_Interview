@@ -98,7 +98,7 @@ def get_response_as_json(request_obj):
         sys.exit(err)
 
 
-def get_kline(api_url, symbol, endtime_ms, starttime_ms, interval="1m"):
+def get_kline(api_url, symbol, endtime_ms, starttime_ms, interval="1d"):
     """ Return List of klines for a passed symbol and interval (default to 1min
         interval) between a startTime and an endTime in milliseconds
     """
@@ -171,7 +171,7 @@ def get_order_book(api_url, symbol, limit=100):
 
 
 def get_sorted_symbols_by_trades(symbol_dict):
-    """ Return a List of passed Dict keys sorted by 9th element (Number of Trades) in sorted List of Sub-Lists """
+    """ Return a List of passed Dict keys sorted ascending by 9th element (Number of Trades) in first entry of List of Sub-Lists """
     # Get a List of the Dict keys sorted by 9th element (Number of Trades) in each
     # sub-List of the first List item by symbol (already know first List item is
     # highest volume per symbol thanks to above sort_klines_by_trades() call
@@ -180,7 +180,7 @@ def get_sorted_symbols_by_trades(symbol_dict):
 
 
 def get_sorted_symbols_by_volume(symbol_dict):
-    """ Return a List of passed Dict keys sorted by 7th element (Volume) in first entry of List of Sub-Lists """
+    """ Return a List of passed Dict keys sorted ascending by 7th element (Volume) in first entry of List of Sub-Lists """
     # Get a List of the Dict keys sorted by 7th element (Volume) in each
     # sub-List of the first List item by symbol (already know first List item is
     # highest volume per symbol thanks to above sort_klines_by_volume() call
@@ -226,6 +226,46 @@ def get_total_notional_value(list_obj):
     return running_total
 
 
+def print_notional_value(orders_dict, name):
+    """ Print data in a Dict containing a List of Lists by notional value """
+    # TODO: Use a single Dict for both bids and asks
+    for item in orders_dict:
+        print("Total notional value for top", len(orders_dict[item]),
+              str(name), "for symbol", item, ":",
+              get_total_notional_value(orders_dict[item]))
+    # NOTE: Is this desired too?
+    #print(item, "total notional value of both:", (bids_total + asks_total))
+
+
+def sort_dict_by_price(dict_obj):
+    """ Sort Dict keys by price in List of Lists data, see
+    https://github.com/binance-exchange/binance-official-api-docs/blob/master/rest-api.md#order-book """
+    # Sort the bids Dict by price
+    for key in dict_obj:
+        dict_obj[key] = sort_by_price(dict_obj[key])
+
+
+def populate_klines(dict_obj, api_url, starttime_ms, endtime_ms):
+    """ Populate the passed Dict object with kline values for each symbol (Dict key) by startTime and endTime """
+    # ThreadPool execute kline fetches for each symbol
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = {
+            executor.submit(get_kline,
+                            api_url=api_url,
+                            symbol=key,
+                            starttime_ms=starttime_ms,
+                            endtime_ms=endtime_ms): key
+            for key in dict_obj
+        }
+
+        for future in concurrent.futures.as_completed(futures):
+            # FIXME!!: This is a BUG! Klines should never return empty sets
+            if future.result() == []:
+                del dict_obj[futures[future]]
+            else:
+                dict_obj[futures[future]] = future.result()
+
+
 def main():
     """ Main Function """
 
@@ -235,7 +275,7 @@ def main():
     # Basic connectivity check
     make_request(api_url + "ping")
 
-    # Get 24h time offset for kline API data calls
+    # Get 24h time offset for kline API data calls in milliseconds
     now_ms, day_ago_ms = get_offset_time_in_milliseconds()
 
     # Get exchangeInfo as JSON
@@ -249,28 +289,13 @@ def main():
     # klines for each symbol)
     symbol_dict = dict.fromkeys(symbol_list, None)
 
-    # ThreadPool execute kline fetches for each symbol
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = {
-            executor.submit(get_kline,
-                            api_url=api_url,
-                            symbol=key,
-                            starttime_ms=day_ago_ms,
-                            endtime_ms=now_ms): key
-            for key in symbol_dict
-        }
-
-        for future in concurrent.futures.as_completed(futures):
-            # FIXME!!: This is a BUG! Klines should never return empty sets
-            if future.result() == []:
-                del symbol_dict[futures[future]]
-            else:
-                symbol_dict[futures[future]] = future.result()
+    # Populate the kline values in the symbol_dict
+    populate_klines(symbol_dict, api_url, day_ago_ms, now_ms)
 
     # Aggregate volume or number of trades based on command arguments
     if args.sort == 'volume':
         for i in symbol_dict:
-            symbol_dict[i] = sort_klines_by_trades(symbol_dict[i])
+            symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
         sorted_symbols = get_sorted_symbols_by_volume(symbol_dict)
         print("Top ", args.top, "symbols by Volume over the last 24h")
     elif args.sort == 'trades':
@@ -314,26 +339,14 @@ def main():
             del asks_dict[key][args.notional:]
 
     # Loop through the Dict, printing the total notional value per symbol
-    for item in bids_dict:
-        print("Total notional value for top", len(bids_dict[item]),
-              "bids for symbol", item, ":",
-              get_total_notional_value(bids_dict[item]))
-
-    for item in asks_dict:
-        print("Total notional value for top", len(asks_dict[item]),
-              "asks for symbol", item, ":",
-              get_total_notional_value(asks_dict[item]))
+    print_notional_value(bids_dict, "bids")
+    print_notional_value(asks_dict, "asks")
     # NOTE: Is this desired too?
     #print(item, "total notional value of both:", (bids_total + asks_total))
 
     if args.spread:
-        # Sort the bids Dict by price
-        for key in bids_dict:
-            bids_dict[key] = sort_by_price(bids_dict[key])
-
-        # Sort the asks Dict by price
-        for key in asks_dict:
-            asks_dict[key] = sort_by_price(asks_dict[key])
+        sort_dict_by_price(bids_dict)
+        sort_dict_by_price(asks_dict)
 
         # Print the results (difference between highest bid price and lowest ask price)
         for key in bids_dict:
