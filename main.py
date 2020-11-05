@@ -145,16 +145,14 @@ def get_offset_time_in_milliseconds():
             int((day_ago - epoch).total_seconds() * 1000.0))
 
 
-def sort_klines_by_volume(kline_list_obj):
-    """ Sort kline List of Lists object by Volume in sub-Lists """
-    # TODO: Make a struct or something to sort by an arbitrary value in klines List instead of hard-coding the 7th element here
-    return sorted(kline_list_obj, key=lambda x: x[6], reverse=True)
-
-
-def sort_klines_by_trades(kline_list_obj):
-    """ Sort kline List of Lists object by Number of Trades in sub-Lists """
-    # TODO: Make a struct or something to sort by an arbitrary value in klines List instead of hard-coding the 9th element here
-    return sorted(kline_list_obj, key=lambda x: x[8], reverse=True)
+def sort_klines(kline_list_obj):
+    """ Sort kline List of Lists object by args.sort in sub-Lists """
+    # TODO: Make a struct or something to sort by an arbitrary value in klines List instead of hard-coding specific elements by arg value here
+    if args.sort == 'volume':
+        sortby = 6
+    elif args.sort == 'trades':
+        sortby = 8
+    return sorted(kline_list_obj, key=lambda x: x[sortby], reverse=True)
 
 
 def find_symbols_by_quote_asset(exchange_json_obj, quote_asset_type=None):
@@ -176,23 +174,16 @@ def get_order_book(api_url, symbol, limit=100):
     return request.json()
 
 
-def get_sorted_symbols_by_trades(symbol_dict):
-    """ Return a List of passed Dict keys sorted ascending by 9th element (Number of Trades) in first entry of List of Sub-Lists """
-    # Get a List of the Dict keys sorted by 9th element (Number of Trades) in each
-    # sub-List of the first List item by symbol (already know first List item is
-    # highest volume per symbol thanks to above sort_klines_by_trades() call
-    # {"ETHBTC": [(_1_)[(_0_)0,1,2,3,4,5,6,7,8(_8_),9,10],[0,1,2,3,4,5,6,7,8(_8_),9,10]]}
-    return sorted(symbol_dict.items(), key=lambda x: x[1][0][8], reverse=True)
-
-
-def get_sorted_symbols_by_volume(symbol_dict):
-    """ Return a List of passed Dict keys sorted ascending by 7th element (Volume) in first entry of List of Sub-Lists """
-    # Get a List of the Dict keys sorted by 7th element (Volume) in each
-    # sub-List of the first List item by symbol (already know first List item is
-    # highest volume per symbol thanks to above sort_klines_by_volume() call
-    # {"ETHBTC": [(_1_)[(_0_)0,1,2,3,4,5,6(_6_),7,8,9,10],[0,1,2,3,4,5,6,7,8,9,10]]}
-
-    return sorted(symbol_dict.items(), key=lambda x: x[1][0][6], reverse=True)
+def get_sorted_symbols(symbol_dict):
+    """ Return a List of passed Dict keys sorted ascending by args.sort element in first entry of List of Sub-Lists """
+    # TODO: Make a struct or something to sort by an arbitrary value in List instead of hard-coding specific elements by arg value here
+    if args.sort == 'volume':
+        sortby = 6
+    elif args.sort == 'trades':
+        sortby = 8
+    return sorted(symbol_dict.items(),
+                  key=lambda x: x[1][0][sortby],
+                  reverse=True)
 
 
 def sort_by_price(list_obj):
@@ -308,17 +299,14 @@ def main():
     populate_klines(symbol_dict, api_url, day_ago_ms, now_ms)
 
     # Aggregate volume or number of trades based on command arguments
-    if args.sort == 'volume':
-        for i in symbol_dict:
-            symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
-        sorted_symbols = get_sorted_symbols_by_volume(symbol_dict)
-        # Print results
-        print_top_symbols(sorted_symbols)
-    elif args.sort == 'trades':
-        for i in symbol_dict:
-            symbol_dict[i] = sort_klines_by_trades(symbol_dict[i])
-        sorted_symbols = get_sorted_symbols_by_trades(symbol_dict)
-        print_top_symbols(sorted_symbols)
+    for i in symbol_dict:
+        symbol_dict[i] = sort_klines(symbol_dict[i])
+
+    # Get sorted List of symbols based on args.sort
+    sorted_symbols = get_sorted_symbols(symbol_dict)
+
+    # Print results
+    print_top_symbols(sorted_symbols)
 
     # Go do the notional value stuff if requested, otherwise we're done.
     if args.notional is None and args.spread is None:
@@ -337,7 +325,6 @@ def main():
     for item in sorted_symbols[0:args.top]:
         bids_dict[item[0]] = None
         asks_dict[item[0]] = None
-        #print(item[0])
 
     # Populate Dicts with bids/asks
     bids_dict = notional_get(bids_dict, api_url, "bids", limit)
