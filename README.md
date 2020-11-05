@@ -14,5 +14,6 @@
        Assuming this means "The difference between the highest bid and the lowest ask on the order book"
        (according to https://coinrivet.com/guides/what-is-cryptocurrency-trading/bid-ask-and-bid-ask-spread-prices-what-does-it-all-mean/)
   - `main.py --quoteAsset USDT --sort trades --spread`
-5. [ ] Every 10 seconds print the result of Q4 and the absolute delta from the previous value for each symbol.
+5. [x] Every 10 seconds print the result of Q4 and the absolute delta from the previous value for each symbol.
+  - `./main.py --quoteAsset USDT --sort trades --spread true --daemon true`
 6. [ ] Make the output of Q5 accessible by querying http://localhost:8080/metrics using the Prometheus Metrics format.
