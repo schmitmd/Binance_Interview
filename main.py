@@ -8,6 +8,7 @@ import argparse
 import datetime
 import time
 import requests
+import prometheus_client
 
 # TODO: Use the community binance python lib
 # from binance.client import Client
@@ -64,9 +65,12 @@ parser.add_argument(
     required=False,
 )
 parser.add_argument(
+    "-d",
     "--daemon",
-    type=bool,
-    help="Print data every 10 seconds",
+    type=str,
+    help=
+    "Print data every 10 seconds to stdout or a local webserver in Prometheus Metrics Format",
+    choices=['stdout', 'prometheus'],
     required=False,
 )
 parser.add_argument(
@@ -254,7 +258,7 @@ def populate_klines(dict_obj, starttime_ms, endtime_ms):
 def print_top_symbols(symbols_list):
     """ Print out the first item (symbol) in the passed List based on --top argument """
     # Print the results
-    print("Top ", args.top, "symbols by", args.sort.capitalize(),
+    print("Top", args.top, "symbols by", args.sort.capitalize(),
           "over the last 24h")
     for item in symbols_list[0:args.top]:
         print(item[0])
@@ -289,6 +293,19 @@ def trim_dict(dict_obj):
     return dict_obj
 
 
+def populate_price_spread(bids_dict, asks_dict):
+    """ Populate Dict with price spreads by symbol """
+    # Make a new Dict from keys in bids_dict (see fixme above about two separate dicts)
+    spreads_dict = dict.fromkeys(bids_dict)
+
+    # Print the results (difference between highest bid price and lowest ask price)
+    for key in spreads_dict:
+        spreads_dict[key] = (float(bids_dict[key][0][0]) -
+                             float(asks_dict[key][-1][0]))
+
+    return spreads_dict
+
+
 def main():
     """ Main Function """
     # Basic connectivity check
@@ -305,7 +322,7 @@ def main():
     # klines for each symbol)
     symbol_dict = dict.fromkeys(symbol_list, None)
 
-    if args.daemon:
+    if args.daemon == "stdout":
         # One-time creation of last_spreads dict
         last_spreads_dict = {}
         while True:
@@ -320,11 +337,7 @@ def main():
 
             # Go do the notional value stuff if requested, otherwise we're done.
             if args.notional is None:
-                if args.spread is None:
-                    sys.exit(
-                        "Cannot have both --spread and --notional undefined")
-                else:
-                    limit = get_order_book_request_limit()
+                limit = get_order_book_request_limit()
             else:
                 limit = get_order_book_request_limit(args.notional)
 
@@ -342,29 +355,31 @@ def main():
             # NOTE: Is this desired too?
             #print(item, "total notional value of both (by symbol):", (bids_total + asks_total))
 
-            # Check for --spread argument, print price spread per-symbol if True
-            if args.spread:
-                sort_dict_by_price(bids_dict)
-                sort_dict_by_price(asks_dict)
+            sort_dict_by_price(bids_dict)
+            sort_dict_by_price(asks_dict)
 
-                # Make a new Dict from keys in bids_dict (see fixme above about two separate dicts)
-                spreads_dict = dict.fromkeys(bids_dict)
-                # Print the results (difference between highest bid price and lowest ask price)
-                for key in spreads_dict:
-                    spreads_dict[key] = (float(bids_dict[key][0][0]) -
-                                         float(asks_dict[key][-1][0]))
-                    print("Price spread for", key, ":", spreads_dict[key])
+            # Make a new Dict from keys in bids_dict (see fixme above about two separate dicts)
+            spreads_dict = populate_price_spread(bids_dict, asks_dict)
 
-                    # FIXME: This is an if check to overcome a bad assumption
-                    # (what if the symbols list from kline values above changes between runs?)
-                    if key in last_spreads_dict:
-                        print(
-                            "Absolute delta of price spread from last pull for",
-                            key, ":",
-                            float(spreads_dict[key] - last_spreads_dict[key]))
+            # Print the results (difference between highest bid price and lowest ask price)
+            for key in spreads_dict:
+                print("Price spread for", key, ":", spreads_dict[key])
 
-                last_spreads_dict = spreads_dict
+                # FIXME: This is an if check to overcome a bad assumption
+                # (what if the symbols list from kline values above changes between runs?)
+                if key in last_spreads_dict:
+                    print("Absolute delta of price spread from last pull for",
+                          key, ":",
+                          float(spreads_dict[key] - last_spreads_dict[key]))
 
+            # Save for deltas calculation in next loop
+            last_spreads_dict = spreads_dict
+            # Sleep for 10 seconds, do it again
+            time.sleep(10)
+
+    elif args.daemon == "prometheus":
+        prometheus_client.start_http_server(8080)
+        while True:
             time.sleep(10)
 
     # Do kline processing
