@@ -272,6 +272,15 @@ def populate_klines(dict_obj, api_url, starttime_ms, endtime_ms):
                 dict_obj[futures[future]] = future.result()
 
 
+def print_top_symbols(symbols_list):
+    """ Print out the first item (symbol) in the passed List based on --top argument """
+    # Print the results
+    print("Top ", args.top, "symbols by", args.sort.capitalize(),
+          "over the last 24h")
+    for item in symbols_list[0:args.top]:
+        print(item[0])
+
+
 def main():
     """ Main Function """
 
@@ -280,9 +289,6 @@ def main():
 
     # Basic connectivity check
     make_request(api_url + "ping")
-
-    # Get 24h time offset for kline API data calls in milliseconds
-    now_ms, day_ago_ms = get_offset_time_in_milliseconds()
 
     # Get exchangeInfo as JSON
     exchange = get_response_as_json(make_request(api_url + "exchangeInfo"))
@@ -295,6 +301,9 @@ def main():
     # klines for each symbol)
     symbol_dict = dict.fromkeys(symbol_list, None)
 
+    # Get 24h time offset for kline API data calls in milliseconds
+    now_ms, day_ago_ms = get_offset_time_in_milliseconds()
+
     # Populate the kline values in the symbol_dict
     populate_klines(symbol_dict, api_url, day_ago_ms, now_ms)
 
@@ -303,16 +312,13 @@ def main():
         for i in symbol_dict:
             symbol_dict[i] = sort_klines_by_volume(symbol_dict[i])
         sorted_symbols = get_sorted_symbols_by_volume(symbol_dict)
-        print("Top ", args.top, "symbols by Volume over the last 24h")
+        # Print results
+        print_top_symbols(sorted_symbols)
     elif args.sort == 'trades':
         for i in symbol_dict:
             symbol_dict[i] = sort_klines_by_trades(symbol_dict[i])
         sorted_symbols = get_sorted_symbols_by_trades(symbol_dict)
-        print("Top", args.top, "symbols by Number of Trades over the last 24h")
-
-    # Print the results
-    for item in sorted_symbols[0:args.top]:
-        print(item[0])
+        print_top_symbols(sorted_symbols)
 
     # Go do the notional value stuff if requested, otherwise we're done.
     if args.notional is None and args.spread is None:
