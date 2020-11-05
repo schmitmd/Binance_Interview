@@ -61,6 +61,12 @@ parser.add_argument(
     required=False,
 )
 parser.add_argument(
+    "--daemon",
+    type=bool,
+    help="Print data every 10 seconds",
+    required=False,
+)
+parser.add_argument(
     "-t",
     "--top",
     type=int,
