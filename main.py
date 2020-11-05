@@ -316,15 +316,11 @@ def main():
     else:
         limit = get_order_book_request_limit()
 
+    # Seed new Dicts with the top symbols returned above
     # FIXME: These shouldn't be separate Dicts, this makes two separate
     # calls to notional_get(), one for bids and one for asks.
-    # Seed new Dicts with the top symbols returned above
-    #bids_dict = dict.fromkeys(symbol_list[0:args.top], None)
-    #asks_dict = dict.fromkeys(symbol_list[0:args.top], None)
-    bids_dict, asks_dict = {}, {}
-    for item in sorted_symbols[0:args.top]:
-        bids_dict[item[0]] = None
-        asks_dict[item[0]] = None
+    bids_dict = {item[0]: None for item in sorted_symbols[0:args.top]}
+    asks_dict = dict.fromkeys(bids_dict)
 
     # Populate Dicts with bids/asks
     bids_dict = notional_get(bids_dict, api_url, "bids", limit)
@@ -341,16 +337,20 @@ def main():
     print_notional_value(bids_dict, "bids")
     print_notional_value(asks_dict, "asks")
     # NOTE: Is this desired too?
-    #print(item, "total notional value of both:", (bids_total + asks_total))
+    #print(item, "total notional value of both (by symbol):", (bids_total + asks_total))
 
+    # Check for --spread argument, print price spread per-symbol if True
     if args.spread:
         sort_dict_by_price(bids_dict)
         sort_dict_by_price(asks_dict)
 
+        # Make a new Dict from keys in bids_dict (see fixme above about two separate dicts)
+        spreads_dict = dict.fromkeys(bids_dict)
         # Print the results (difference between highest bid price and lowest ask price)
-        for key in bids_dict:
-            print("Price spread for", key, ":",
-                  (float(bids_dict[key][0][0]) - float(asks_dict[key][-1][0])))
+        for key in spreads_dict:
+            spreads_dict[key] = (float(bids_dict[key][0][0]) -
+                                 float(asks_dict[key][-1][0]))
+            print("Price spread for", key, ":", spreads_dict[key])
 
 
 # Execute main function
