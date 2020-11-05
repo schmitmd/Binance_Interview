@@ -6,6 +6,7 @@ import concurrent.futures
 import sys
 import argparse
 import datetime
+import time
 import requests
 
 # TODO: Use the community binance python lib
@@ -259,6 +260,35 @@ def print_top_symbols(symbols_list):
         print(item[0])
 
 
+def process_klines(symbol_dict):
+    """ Process last 24 hours of kline data by symbol in passed Dict """
+    # Get 24h time offset for kline API data calls in milliseconds
+    now_ms, day_ago_ms = get_offset_time_in_milliseconds()
+
+    # Populate the kline values in the symbol_dict
+    populate_klines(symbol_dict, day_ago_ms, now_ms)
+
+    # Aggregate volume or number of trades based on command arguments
+    for i in symbol_dict:
+        symbol_dict[i] = sort_klines(symbol_dict[i])
+
+
+def process_order_book_dict(sorted_symbols, order_book_type, limit):
+    """ Create and return a Dict corresponding to the Order Book output per symbol (key) by type in a passed List """
+    dict_obj = {item[0]: None for item in sorted_symbols[0:args.top]}
+    dict_obj = notional_get(dict_obj, str(order_book_type), limit)
+    return dict_obj
+
+
+def trim_dict(dict_obj):
+    """ Trim each value (List of Lists) in a passed Dict down to args.notional if defined """
+    if args.notional is not None:
+        # Trim to requested amount
+        for key in dict_obj:
+            del dict_obj[key][args.notional:]
+    return dict_obj
+
+
 def main():
     """ Main Function """
     # Basic connectivity check
@@ -275,15 +305,70 @@ def main():
     # klines for each symbol)
     symbol_dict = dict.fromkeys(symbol_list, None)
 
-    # Get 24h time offset for kline API data calls in milliseconds
-    now_ms, day_ago_ms = get_offset_time_in_milliseconds()
+    if args.daemon:
+        # One-time creation of last_spreads dict
+        last_spreads_dict = {}
+        while True:
+            # Do kline processing
+            process_klines(symbol_dict)
 
-    # Populate the kline values in the symbol_dict
-    populate_klines(symbol_dict, day_ago_ms, now_ms)
+            # Get sorted List of symbols based on args.sort
+            sorted_symbols = get_sorted_symbols(symbol_dict)
 
-    # Aggregate volume or number of trades based on command arguments
-    for i in symbol_dict:
-        symbol_dict[i] = sort_klines(symbol_dict[i])
+            # Print results
+            print_top_symbols(sorted_symbols)
+
+            # Go do the notional value stuff if requested, otherwise we're done.
+            if args.notional is None:
+                if args.spread is None:
+                    sys.exit(
+                        "Cannot have both --spread and --notional undefined")
+                else:
+                    limit = get_order_book_request_limit()
+            else:
+                limit = get_order_book_request_limit(args.notional)
+
+            # Seed new Dicts with the top symbols returned above
+            # FIXME: These shouldn't be separate Dicts, this makes two separate
+            # calls to notional_get(), one for bids and one for asks.
+            bids_dict = process_order_book_dict(sorted_symbols, "bids", limit)
+            asks_dict = process_order_book_dict(sorted_symbols, "asks", limit)
+            trim_dict(bids_dict)
+            trim_dict(asks_dict)
+
+            # Loop through the Dict, printing the total notional value per symbol
+            print_notional_value(bids_dict, "bids")
+            print_notional_value(asks_dict, "asks")
+            # NOTE: Is this desired too?
+            #print(item, "total notional value of both (by symbol):", (bids_total + asks_total))
+
+            # Check for --spread argument, print price spread per-symbol if True
+            if args.spread:
+                sort_dict_by_price(bids_dict)
+                sort_dict_by_price(asks_dict)
+
+                # Make a new Dict from keys in bids_dict (see fixme above about two separate dicts)
+                spreads_dict = dict.fromkeys(bids_dict)
+                # Print the results (difference between highest bid price and lowest ask price)
+                for key in spreads_dict:
+                    spreads_dict[key] = (float(bids_dict[key][0][0]) -
+                                         float(asks_dict[key][-1][0]))
+                    print("Price spread for", key, ":", spreads_dict[key])
+
+                    # FIXME: This is an if check to overcome a bad assumption
+                    # (what if the symbols list from kline values above changes between runs?)
+                    if key in last_spreads_dict:
+                        print(
+                            "Absolute delta of price spread from last pull for",
+                            key, ":",
+                            float(spreads_dict[key] - last_spreads_dict[key]))
+
+                last_spreads_dict = spreads_dict
+
+            time.sleep(10)
+
+    # Do kline processing
+    process_klines(symbol_dict)
 
     # Get sorted List of symbols based on args.sort
     sorted_symbols = get_sorted_symbols(symbol_dict)
@@ -292,29 +377,21 @@ def main():
     print_top_symbols(sorted_symbols)
 
     # Go do the notional value stuff if requested, otherwise we're done.
-    if args.notional is None and args.spread is None:
-        sys.exit(0)
-    elif args.notional is not None:
-        limit = get_order_book_request_limit(args.notional)
+    if args.notional is None:
+        if args.spread is None:
+            sys.exit(0)
+        else:
+            limit = get_order_book_request_limit()
     else:
-        limit = get_order_book_request_limit()
+        limit = get_order_book_request_limit(args.notional)
 
     # Seed new Dicts with the top symbols returned above
     # FIXME: These shouldn't be separate Dicts, this makes two separate
     # calls to notional_get(), one for bids and one for asks.
-    bids_dict = {item[0]: None for item in sorted_symbols[0:args.top]}
-    asks_dict = dict.fromkeys(bids_dict)
-
-    # Populate Dicts with bids/asks
-    bids_dict = notional_get(bids_dict, "bids", limit)
-    asks_dict = notional_get(asks_dict, "asks", limit)
-
-    if args.notional is not None:
-        # Trim to requested amount
-        for key in bids_dict:
-            del bids_dict[key][args.notional:]
-        for key in asks_dict:
-            del asks_dict[key][args.notional:]
+    bids_dict = process_order_book_dict(sorted_symbols, "bids", limit)
+    asks_dict = process_order_book_dict(sorted_symbols, "asks", limit)
+    trim_dict(bids_dict)
+    trim_dict(asks_dict)
 
     # Loop through the Dict, printing the total notional value per symbol
     print_notional_value(bids_dict, "bids")
