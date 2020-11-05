@@ -7,7 +7,6 @@ import sys
 import argparse
 import datetime
 import requests
-import simplejson
 
 # TODO: Use the community binance python lib
 # from binance.client import Client
@@ -25,6 +24,9 @@ import simplejson
 #    help="A valid API secret token for querying the Binance SPOT API",
 #    required=False,
 #)
+
+# Set base API URL
+API_BASE_URL = "https://api.binance.com/api/v3/"
 
 # Parse Arguments
 parser = argparse.ArgumentParser(
@@ -94,26 +96,15 @@ def make_request(url):
                  "Please check your connection.")
 
 
-def get_response_as_json(request_obj):
-    """ Return JSON-formatted string from passed request object """
-    try:
-        return request_obj.json()
-    except simplejson.errors.JSONDecodeError as err:
-        # TODO: Make this output more useful.  "Expecting value: line 1 column 1 (char 0)" isn't all that helpful.
-        # TODO: Handle exceptions in addition to JSONDecodeError
-        sys.exit(err)
-
-
-def get_kline(api_url, symbol, endtime_ms, starttime_ms, interval="1d"):
+def get_kline(symbol, endtime_ms, starttime_ms, interval="1d"):
     """ Return List of klines for a passed symbol and interval (default to 1min
         interval) between a startTime and an endTime in milliseconds
     """
     kline = make_request(
-        str(api_url) + "klines" + "?symbol=" + str(symbol) + "&interval=" +
-        str(interval) + "&endTime=" + str(endtime_ms) + "&startTime=" +
-        str(starttime_ms))
+        str(API_BASE_URL) + "klines" + "?symbol=" + str(symbol) +
+        "&interval=" + str(interval) + "&endTime=" + str(endtime_ms) +
+        "&startTime=" + str(starttime_ms))
 
-    # FIXME: should use get_response_as_json func?
     return list(kline.json())
 
 
@@ -167,9 +158,9 @@ def find_symbols_by_quote_asset(exchange_json_obj, quote_asset_type=None):
 
 
 # TODO: set allowed numbers for limit option
-def get_order_book(api_url, symbol, limit=100):
+def get_order_book(symbol, limit=100):
     """ Get Order Book for a symbol """
-    request = make_request(api_url + "depth" + "?symbol=" + symbol +
+    request = make_request(API_BASE_URL + "depth" + "?symbol=" + symbol +
                            "&limit=" + str(limit))
     return request.json()
 
@@ -192,15 +183,12 @@ def sort_by_price(list_obj):
     return sorted(list_obj, key=lambda x: x[0], reverse=True)
 
 
-def notional_get(symbol_dict, api_url, get_type, limit):
+def notional_get(symbol_dict, get_type, limit):
     """ Get Order Book for a symbol, filtering by type (bids/asks) as passed """
     # ThreadPool the API calls for getting order books.
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = {
-            executor.submit(get_order_book,
-                            api_url=api_url,
-                            symbol=key,
-                            limit=limit): key
+            executor.submit(get_order_book, symbol=key, limit=limit): key
             for key in symbol_dict
         }
         for future in concurrent.futures.as_completed(futures):
@@ -242,13 +230,12 @@ def sort_dict_by_price(dict_obj):
         dict_obj[key] = sort_by_price(dict_obj[key])
 
 
-def populate_klines(dict_obj, api_url, starttime_ms, endtime_ms):
+def populate_klines(dict_obj, starttime_ms, endtime_ms):
     """ Populate the passed Dict object with kline values for each symbol (Dict key) by startTime and endTime """
     # ThreadPool execute kline fetches for each symbol
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = {
             executor.submit(get_kline,
-                            api_url=api_url,
                             symbol=key,
                             starttime_ms=starttime_ms,
                             endtime_ms=endtime_ms): key
@@ -274,17 +261,13 @@ def print_top_symbols(symbols_list):
 
 def main():
     """ Main Function """
-
-    # Set base API URL
-    api_url = "https://api.binance.com/api/v3/"
-
     # Basic connectivity check
-    make_request(api_url + "ping")
+    make_request(API_BASE_URL + "ping")
 
     # Get exchangeInfo as JSON
-    exchange = get_response_as_json(make_request(api_url + "exchangeInfo"))
+    exchange = make_request(API_BASE_URL + "exchangeInfo").json()
 
-    # Populate symbols list by searching through exchangeInfo for quoteAssets of type args.quoteAsset
+    # Populate symbols List by searching through exchangeInfo for quoteAssets of type args.quoteAsset
     symbol_list = find_symbols_by_quote_asset(exchange, args.quoteAsset)
 
     # Make a dictionary with the keys being symbols from the symbol_list above
@@ -296,7 +279,7 @@ def main():
     now_ms, day_ago_ms = get_offset_time_in_milliseconds()
 
     # Populate the kline values in the symbol_dict
-    populate_klines(symbol_dict, api_url, day_ago_ms, now_ms)
+    populate_klines(symbol_dict, day_ago_ms, now_ms)
 
     # Aggregate volume or number of trades based on command arguments
     for i in symbol_dict:
@@ -323,8 +306,8 @@ def main():
     asks_dict = dict.fromkeys(bids_dict)
 
     # Populate Dicts with bids/asks
-    bids_dict = notional_get(bids_dict, api_url, "bids", limit)
-    asks_dict = notional_get(asks_dict, api_url, "asks", limit)
+    bids_dict = notional_get(bids_dict, "bids", limit)
+    asks_dict = notional_get(asks_dict, "asks", limit)
 
     if args.notional is not None:
         # Trim to requested amount
