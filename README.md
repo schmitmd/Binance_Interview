@@ -17,3 +17,4 @@
 5. [x] Every 10 seconds print the result of Q4 and the absolute delta from the previous value for each symbol.
   - `./main.py --quoteAsset USDT --sort trades --daemon stdout`
 6. [ ] Make the output of Q5 accessible by querying http://localhost:8080/metrics using the Prometheus Metrics format.
+  - `./main.py --quoteAsset USDT --sort trades --daemon prometheus`
