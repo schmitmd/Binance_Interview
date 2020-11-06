@@ -27,9 +27,6 @@ import prometheus_client
 #    required=False,
 #)
 
-# Set base API URL
-API_BASE_URL = "https://api.binance.com/api/v3/"
-
 # Parse Arguments
 parser = argparse.ArgumentParser(
     description=" Binance Interview Questions Script ", )
@@ -46,7 +43,7 @@ parser.add_argument(
     "-s",
     "--sort",
     type=str,
-    help="Sort top values by",
+    help="Sort top symbols in ascending order by",
     choices=['volume', 'trades'],
     default='volume',
     required=False,
@@ -83,6 +80,22 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+# Set base API URL
+API_BASE_URL = "https://api.binance.com/api/v3/"
+
+# Set names and descriptions of Prometheus Metrics based on arguments
+TOP_SYMBOLS_LIST_METRIC = 'top_symbols'
+TOP_SYMBOLS_LIST_DOC = ("List of top " + str(args.top) +
+                        " symbols found in ascending order by " + args.sort)
+
+TOP_SYMBOLS_SPREAD_METRIC = 'top_symbols_price_spread'
+TOP_SYMBOLS_SPREAD_DOC = ("Price spread of top " + str(args.top) +
+                          " symbols found in ascending order by " + args.sort)
+TOP_SYMBOLS_NOTIONAL_METRIC = 'top_symbols_notional_value'
+TOP_SYMBOLS_NOTIONAL_DOC = ("Notional value of top " + str(args.top) +
+                            " symbols found in ascending order by " +
+                            args.sort)
+
 
 def make_request(url):
     """  Hit a URL and return a requests object if the return code was 200 OK """
@@ -101,7 +114,7 @@ def make_request(url):
                  "Please check your connection.")
 
 
-def get_kline(symbol, endtime_ms, starttime_ms, interval="1d"):
+def get_kline(symbol, endtime_ms, starttime_ms, interval="5m"):
     """ Return List of klines for a passed symbol and interval (default to 1min
         interval) between a startTime and an endTime in milliseconds
     """
@@ -162,7 +175,6 @@ def find_symbols_by_quote_asset(exchange_json_obj, quote_asset_type=None):
     return symbol_list
 
 
-# TODO: set allowed numbers for limit option
 def get_order_book(symbol, limit=100):
     """ Get Order Book for a symbol """
     request = make_request(API_BASE_URL + "depth" + "?symbol=" + symbol +
@@ -238,7 +250,7 @@ def sort_dict_by_price(dict_obj):
 def populate_klines(dict_obj, starttime_ms, endtime_ms):
     """ Populate the passed Dict object with kline values for each symbol (Dict key) by startTime and endTime """
     # ThreadPool execute kline fetches for each symbol
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=70) as executor:
         futures = {
             executor.submit(get_kline,
                             symbol=key,
@@ -312,10 +324,13 @@ def main():
     make_request(API_BASE_URL + "ping")
 
     # Get exchangeInfo as JSON
-    exchange = make_request(API_BASE_URL + "exchangeInfo").json()
+    #exchange = make_request(API_BASE_URL + "exchangeInfo").json()
 
     # Populate symbols List by searching through exchangeInfo for quoteAssets of type args.quoteAsset
-    symbol_list = find_symbols_by_quote_asset(exchange, args.quoteAsset)
+    #symbol_list = find_symbols_by_quote_asset(exchange, args.quoteAsset)
+    symbol_list = [
+        "ETHBTC", "LTCBTC", "AVAXBTC", "WRXBTC", "FILBTC", "LUNABTC"
+    ]
 
     # Make a dictionary with the keys being symbols from the symbol_list above
     # Lists (which will be populated below as Lists of Lists by getting the
@@ -378,8 +393,88 @@ def main():
             time.sleep(10)
 
     elif args.daemon == "prometheus":
-        prometheus_client.start_http_server(8080)
+        # Start the webserver on port 8080 for serving Prometheus Metrics
+        prometheus_client.start_http_server(8090)
+
+        # TODO: Add processing time calculations (https://github.com/prometheus/client_python/blob/3889a5d4d0be8d47160148cec6093c149db0e82d/prometheus_client/metrics.py#L424)
+        symbols_info = prometheus_client.Info(TOP_SYMBOLS_LIST_METRIC,
+                                              TOP_SYMBOLS_LIST_DOC)
+        spread_gauge = prometheus_client.Summary(
+            TOP_SYMBOLS_SPREAD_METRIC, TOP_SYMBOLS_SPREAD_DOC,
+            ['symbol', 'ten_second_delta'])
+        notional_gauge = prometheus_client.Summary(
+            TOP_SYMBOLS_NOTIONAL_METRIC, TOP_SYMBOLS_NOTIONAL_DOC,
+            ['symbol', 'type', 'number_aggregated'])
+
+        # One-time creation of last_spreads dict
+        last_spreads_dict = {}
         while True:
+            # Do kline processing
+            process_klines(symbol_dict)
+
+            # Get sorted List of symbols based on args.sort
+            sorted_symbols = get_sorted_symbols(symbol_dict)
+
+            # Print top symbols in an Info metric
+            top_symbols = []
+            # Print results
+            for item in sorted_symbols[0:args.top]:
+                top_symbols.append(item[0])
+                #sorted_symbols[0:args.top]:
+            symbols_info.info(
+                {"top " + str(args.top) + " symbols": str(top_symbols)})
+
+            # Go do the notional value stuff if requested, otherwise we're done.
+            if args.notional is None:
+                limit = get_order_book_request_limit()
+            else:
+                limit = get_order_book_request_limit(args.notional)
+
+            # Seed new Dicts with the top symbols returned above
+            # FIXME: These shouldn't be separate Dicts, this makes two separate
+            # calls to notional_get(), one for bids and one for asks.
+            bids_dict = process_order_book_dict(sorted_symbols, "bids", limit)
+            asks_dict = process_order_book_dict(sorted_symbols, "asks", limit)
+            trim_dict(bids_dict)
+            trim_dict(asks_dict)
+
+            # Loop through the Dict, printing the total notional value per symbol
+            for item in bids_dict:
+                notional_gauge.labels(item, "bids", len(
+                    bids_dict[item])).observe(
+                        get_total_notional_value(bids_dict[item]))
+            for item in asks_dict:
+                notional_gauge.labels(item, "asks", len(
+                    asks_dict[item])).observe(
+                        get_total_notional_value(asks_dict[item]))
+            # NOTE: Is this desired too?
+            #print(item, "total notional value of both (by symbol):", (bids_total + asks_total))
+
+            # Sort the bids and asks Dicts
+            sort_dict_by_price(bids_dict)
+            sort_dict_by_price(asks_dict)
+
+            # Make a new Dict from keys in bids_dict (see fixme above about two separate dicts)
+            spreads_dict = populate_price_spread(bids_dict, asks_dict)
+
+            # Print the results (difference between highest bid price and lowest ask price)
+            for key in spreads_dict:
+
+                # FIXME: This is an if check to overcome a bad assumption
+                # (what if the symbols list from kline values above changes between runs?)
+                if key in last_spreads_dict:
+                    spread_gauge.labels(
+                        key,
+                        str(float(spreads_dict[key] -
+                                  last_spreads_dict[key]))).observe(
+                                      spreads_dict[key])
+                else:
+                    #print("Price spread for", key, ":", spreads_dict[key])
+                    spread_gauge.labels(key, 0).observe(spreads_dict[key])
+
+            # Save for delta calculation in next loop iteration
+            last_spreads_dict = spreads_dict
+            # Sleep for 10 seconds, do it again
             time.sleep(10)
 
     # Do kline processing
