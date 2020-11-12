@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """ Binance Interview """
 
-import sys
 import argparse
+import datetime
+import concurrent.futures
 from binance.client import Client
 
 # Initialize CLI arguments
@@ -28,7 +29,7 @@ parser.add_argument(
     type=str,
     help=
     "A quote asset type to filter symbols by in the Binance SPOT API (BTC,USDT,etc)",
-    required=False,
+    required=True, # TODO: This shouldn't be a required arg. Set sane defaults
 )
 args = parser.parse_args()
 
@@ -37,11 +38,14 @@ def filter_exchange_info(exchange_info, filter_key, filter_value):
     # TODO: make this work for multiple filters and multiple sub-values such as:
     # 'orderTypes': ['LIMIT', 'LIMIT_MAKER', 'MARKET', 'STOP_LOSS_LIMIT', 'TAKE_PROFIT_LIMIT'],
     """ Filter exchange_info by sub-attribute
-    :returns: list - List of product dictionaries
+    :param exchange_info: required
+    :type exchange_info: dict
+    :param filter_key: required
+    :type filter_key: str
+    :param filter_value: required
+    :type filter_value: str
 
-    .. code-block:: python
-    :raises: BinanceRequestException, BinanceAPIException
-
+    :returns: list - List of symbols
     """
     # Symbols list
     symbol_list = []
@@ -51,20 +55,72 @@ def filter_exchange_info(exchange_info, filter_key, filter_value):
     return symbol_list
 
 
+def get_last_day_offset_time_in_milliseconds():
+    """ Return current time in milliseconds
+    :returns: int, int - Current time in milliseconds (UTC), 24 hours ago in milliseconds (UTC)
+    """
+    # FIXME: Allow specifying timezone like "America/Denver", don't force UTC timezone
+    # Get epoch (assume UTC by default)
+    epoch = datetime.datetime.utcfromtimestamp(0).replace(
+        tzinfo=datetime.timezone.utc)
+
+    # Get current time (assume UTC by default)
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Get time from 24h ago epoch (assume UTC by default)
+    day_ago = (now - datetime.timedelta(hours=24))
+
+    # Return the difference in milliseconds
+    return (int((now - epoch).total_seconds() * 1000.0),
+            int((day_ago - epoch).total_seconds() * 1000.0))
+
+
+def threaded_get_klines(binance_client, symbol_dict, start_ms, end_ms):
+    """ Use a ThreadPool to get klines faster
+    :param binance_client: required
+    :type binance_client: binance.client.Client
+    :param symbol_dict: required
+    :type symbol_dict: dict
+    :param start_ms: required
+    :type start_ms: int
+    :param end_ms: required
+    :type end_ms: int
+
+    :returns: Dict with symbol keys and kline result (List) values
+    """
+    # Empty Dict to return when we're done
+    temp_symbol_dict = {}
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = { executor.submit(
+            binance_client.get_klines, symbol=key,
+            interval=Client.KLINE_INTERVAL_30MINUTE, startTime=start_ms, endTime=end_ms): key
+            for key in symbol_dict
+            }
+
+        for future in concurrent.futures.as_completed(futures):
+            # Only add if something was returned
+            if future.result():
+                temp_symbol_dict[futures[future]] = future.result()
+    return temp_symbol_dict
+
+
 def main():
     """  Main Function """
     # Initialize Client binance object
     client = Client(api_key=args.apikey, api_secret=args.secret)
 
+    # Get current time and 24 hours ago in milliseconds
+    now_ms, day_ago_ms = get_last_day_offset_time_in_milliseconds()
+
     # Get current exchangeInfo as Dict
     exchange = client.get_exchange_info()
 
-    # Get List of symbols filtered by quoteAsset
+    # Make a Dict of symbols filtered by quoteAsset, to be populated with klines
     # TODO: Make the filter_key part of argparse params, don't hard-code, make args more generic overall
-    filtered_symbols = filter_exchange_info(exchange_info=exchange, filter_key="quoteAsset", filter_value=args.quoteAsset)
+    kline_dict = dict.fromkeys(filter_exchange_info(exchange_info=exchange, filter_key="quoteAsset", filter_value=args.quoteAsset), [])
 
-    # Exit success
-    sys.exit(0)
+    # Populate klines in the Dict
+    kline_dict = threaded_get_klines(binance_client=client, symbol_dict=kline_dict, start_ms=day_ago_ms, end_ms=now_ms)
 
 
 # Execute main function
