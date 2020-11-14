@@ -4,6 +4,8 @@
 
 import argparse
 import datetime
+import time
+import sys
 import concurrent.futures
 from binance.client import Client
 
@@ -55,26 +57,6 @@ def filter_exchange_info(exchange_info, filter_key, filter_value):
     return symbol_list
 
 
-def get_last_day_offset_time_in_milliseconds():
-    """ Return current time in milliseconds
-    :returns: int, int - Current time in milliseconds (UTC), 24 hours ago in milliseconds (UTC)
-    """
-    # FIXME: Allow specifying timezone like "America/Denver", don't force UTC timezone
-    # Get epoch (assume UTC by default)
-    epoch = datetime.datetime.utcfromtimestamp(0).replace(
-        tzinfo=datetime.timezone.utc)
-
-    # Get current time (assume UTC by default)
-    now = datetime.datetime.now(datetime.timezone.utc)
-
-    # Get time from 24h ago epoch (assume UTC by default)
-    day_ago = (now - datetime.timedelta(hours=24))
-
-    # Return the difference in milliseconds
-    return (int((now - epoch).total_seconds() * 1000.0),
-            int((day_ago - epoch).total_seconds() * 1000.0))
-
-
 def threaded_get_klines(binance_client, symbol_dict, start_ms, end_ms):
     """ Use a ThreadPool to get klines faster
     :param binance_client: required
@@ -110,7 +92,8 @@ def main():
     client = Client(api_key=args.apikey, api_secret=args.secret)
 
     # Get current time and 24 hours ago in milliseconds
-    now_ms, day_ago_ms = get_last_day_offset_time_in_milliseconds()
+    now_ms = round(time.time_ns()/1000000)
+    day_ago_ms = now_ms - 86400000
 
     # Get current exchangeInfo as Dict
     exchange = client.get_exchange_info()
